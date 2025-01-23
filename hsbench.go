@@ -6,7 +6,6 @@ package main
 
 import (
 	"bytes"
-	"code.cloudfoundry.org/bytefmt"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha1"
@@ -16,10 +15,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
 	"io"
 	"io/ioutil"
 	"log"
@@ -34,6 +29,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"code.cloudfoundry.org/bytefmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 // Global variables
@@ -152,7 +153,9 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 	totalLat := int64(0)
 	minLat := float64(0)
 	maxLat := float64(0)
-	NinetyNineLat := float64(0)
+	Lat99 := float64(0)
+	Lat95 := float64(0)
+	Lat90 := float64(0)
 	avgLat := float64(0)
 	if ops > 0 {
 		minLat = float64(is.latNano[0]) / 1000000
@@ -161,8 +164,12 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 			totalLat += is.latNano[i]
 		}
 		avgLat = float64(totalLat) / float64(ops) / 1000000
-		NintyNineLatNano := is.latNano[int64(math.Round(0.99*float64(ops)))-1]
-		NinetyNineLat = float64(NintyNineLatNano) / 1000000
+		Lat99Nano := is.latNano[int64(math.Round(0.99*float64(ops)))-1]
+		Lat99 = float64(Lat99Nano) / 1000000
+		Lat95Nano := is.latNano[int64(math.Round(0.95*float64(ops)))-1]
+		Lat95 = float64(Lat95Nano) / 1000000
+		Lat90Nano := is.latNano[int64(math.Round(0.9*float64(ops)))-1]
+		Lat90 = float64(Lat90Nano) / 1000000
 	}
 	seconds := float64(is.intervalNano) / 1000000000
 	mbps := float64(is.bytes) / seconds / bytefmt.MEGABYTE
@@ -178,29 +185,33 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 		iops,
 		minLat,
 		avgLat,
-		NinetyNineLat,
+		Lat99,
+		Lat95,
+		Lat90,
 		maxLat,
 		is.slowdowns}
 }
 
 type OutputStats struct {
-	Loop          int
-	IntervalName  string
-	Seconds       float64
-	Mode          string
-	Ops           int
-	Mbps          float64
-	Iops          float64
-	MinLat        float64
-	AvgLat        float64
-	NinetyNineLat float64
-	MaxLat        float64
-	Slowdowns     int64
+	Loop         int
+	IntervalName string
+	Seconds      float64
+	Mode         string
+	Ops          int
+	Mbps         float64
+	Iops         float64
+	MinLat       float64
+	AvgLat       float64
+	Lat99        float64
+	Lat95        float64
+	Lat90        float64
+	MaxLat       float64
+	Slowdowns    int64
 }
 
 func (o *OutputStats) log() {
 	log.Printf(
-		"Loop: %d, Int: %s, Dur(s): %.1f, Mode: %s, Ops: %d, MB/s: %.2f, IO/s: %.0f, Lat(ms): [ min: %.1f, avg: %.1f, 99%%: %.1f, max: %.1f ], Slowdowns: %d",
+		"Loop: %d, Int: %s, Dur(s): %.1f, Mode: %s, Ops: %d, MB/s: %.2f, IO/s: %.0f, Lat(ms): [ min: %.1f, avg: %.1f, 99%%: %.1f, 95%%: %.1f, 90%%: %.1f, max: %.1f ], Slowdowns: %d",
 		o.Loop,
 		o.IntervalName,
 		o.Seconds,
@@ -210,7 +221,9 @@ func (o *OutputStats) log() {
 		o.Iops,
 		o.MinLat,
 		o.AvgLat,
-		o.NinetyNineLat,
+		o.Lat99,
+		o.Lat95,
+		o.Lat90,
 		o.MaxLat,
 		o.Slowdowns)
 }
@@ -230,6 +243,8 @@ func (o *OutputStats) csv_header(w *csv.Writer) {
 		"Min Latency (ms)",
 		"Avg Latency(ms)",
 		"99% Latency(ms)",
+		"95% Latency(ms)",
+		"90% Latency(ms)",
 		"Max Latency(ms)",
 		"Slowdowns"}
 
@@ -253,7 +268,9 @@ func (o *OutputStats) csv(w *csv.Writer) {
 		strconv.FormatFloat(o.Iops, 'f', 2, 64),
 		strconv.FormatFloat(o.MinLat, 'f', 2, 64),
 		strconv.FormatFloat(o.AvgLat, 'f', 2, 64),
-		strconv.FormatFloat(o.NinetyNineLat, 'f', 2, 64),
+		strconv.FormatFloat(o.Lat99, 'f', 2, 64),
+		strconv.FormatFloat(o.Lat95, 'f', 2, 64),
+		strconv.FormatFloat(o.Lat90, 'f', 2, 64),
 		strconv.FormatFloat(o.MaxLat, 'f', 2, 64),
 		strconv.FormatInt(o.Slowdowns, 10)}
 
