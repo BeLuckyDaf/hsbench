@@ -156,6 +156,8 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 	Lat99 := float64(0)
 	Lat95 := float64(0)
 	Lat90 := float64(0)
+	Lat75 := float64(0)
+	Lat50 := float64(0)
 	avgLat := float64(0)
 	if ops > 0 {
 		minLat = float64(is.latNano[0]) / 1000000
@@ -170,6 +172,10 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 		Lat95 = float64(Lat95Nano) / 1000000
 		Lat90Nano := is.latNano[int64(math.Round(0.9*float64(ops)))-1]
 		Lat90 = float64(Lat90Nano) / 1000000
+		Lat75Nano := is.latNano[int64(math.Round(0.75*float64(ops)))-1]
+		Lat75 = float64(Lat75Nano) / 1000000
+		Lat50Nano := is.latNano[int64(math.Round(0.5*float64(ops)))-1]
+		Lat50 = float64(Lat50Nano) / 1000000
 	}
 	seconds := float64(is.intervalNano) / 1000000000
 	mbps := float64(is.bytes) / seconds / bytefmt.MEGABYTE
@@ -188,6 +194,8 @@ func (is *IntervalStats) makeOutputStats() OutputStats {
 		Lat99,
 		Lat95,
 		Lat90,
+		Lat75,
+		Lat50,
 		maxLat,
 		is.slowdowns}
 }
@@ -205,13 +213,15 @@ type OutputStats struct {
 	Lat99        float64
 	Lat95        float64
 	Lat90        float64
+	Lat75        float64
+	Lat50        float64
 	MaxLat       float64
 	Slowdowns    int64
 }
 
 func (o *OutputStats) log() {
 	log.Printf(
-		"Loop: %d, Int: %s, Dur(s): %.1f, Mode: %s, Ops: %d, MB/s: %.2f, IO/s: %.0f, Lat(ms): [ min: %.1f, avg: %.1f, 99%%: %.1f, 95%%: %.1f, 90%%: %.1f, max: %.1f ], Slowdowns: %d",
+		"Loop: %d, Int: %s, Dur(s): %.1f, Mode: %s, Ops: %d, MB/s: %.2f, IO/s: %.0f, Lat(ms): [ min: %.1f, avg: %.1f, 99%%: %.1f, 95%%: %.1f, 90%%: %.1f, 75%%: %.1f, 50%%: %.1f, max: %.1f ], Slowdowns: %d",
 		o.Loop,
 		o.IntervalName,
 		o.Seconds,
@@ -224,6 +234,8 @@ func (o *OutputStats) log() {
 		o.Lat99,
 		o.Lat95,
 		o.Lat90,
+		o.Lat75,
+		o.Lat50,
 		o.MaxLat,
 		o.Slowdowns)
 }
@@ -245,6 +257,8 @@ func (o *OutputStats) csv_header(w *csv.Writer) {
 		"99% Latency(ms)",
 		"95% Latency(ms)",
 		"90% Latency(ms)",
+		"75% Latency(ms)",
+		"50% Latency(ms)",
 		"Max Latency(ms)",
 		"Slowdowns"}
 
@@ -271,6 +285,8 @@ func (o *OutputStats) csv(w *csv.Writer) {
 		strconv.FormatFloat(o.Lat99, 'f', 2, 64),
 		strconv.FormatFloat(o.Lat95, 'f', 2, 64),
 		strconv.FormatFloat(o.Lat90, 'f', 2, 64),
+		strconv.FormatFloat(o.Lat75, 'f', 2, 64),
+		strconv.FormatFloat(o.Lat50, 'f', 2, 64),
 		strconv.FormatFloat(o.MaxLat, 'f', 2, 64),
 		strconv.FormatInt(o.Slowdowns, 10)}
 
