@@ -35,6 +35,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"golang.org/x/net/http2"
 )
 
 // Global variables
@@ -67,7 +68,7 @@ var HTTPTransport http.RoundTripper = &http.Transport{
 	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 }
 
-var httpClient = &http.Client{Transport: HTTPTransport}
+var httpClient = &http.Client{Transport: &http2.Transport{}}
 
 func getS3Client() *s3.S3 {
 	// Build our config
