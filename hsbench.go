@@ -708,7 +708,10 @@ func runBucketsClear(thread_num int, stats *Stats) {
 			atomic.AddInt64(&op_counter, -1)
 			break
 		}
-		out, err := svc.ListObjects(&s3.ListObjectsInput{Bucket: &buckets[bucket_num]})
+		out, err := svc.ListObjects(&s3.ListObjectsInput{
+			Bucket: &buckets[bucket_num],
+			Prefix: &object_prefix,
+		})
 		if err != nil {
 			break
 		}
@@ -949,7 +952,7 @@ func main() {
 		S3ForcePathStyle:        aws.Bool(true),
 		HTTPClient: &http.Client{
 			Transport: &http.Transport{
-				ForceAttemptHTTP2: false,
+				ForceAttemptHTTP2: force_http1,
 			},
 		},
 	}
