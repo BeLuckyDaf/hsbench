@@ -9,7 +9,6 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha1"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
@@ -20,7 +19,6 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -35,7 +33,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"golang.org/x/net/http2"
 )
 
 // Global variables
@@ -49,50 +46,8 @@ var object_count_flag bool
 var endtime time.Time
 var interval float64
 var zero_object_data bool
-
-// Our HTTP transport used for the roundtripper below
-var HTTPTransport http.RoundTripper = &http.Transport{
-	Proxy: http.ProxyFromEnvironment,
-	Dial: (&net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).Dial,
-	TLSHandshakeTimeout:   10 * time.Second,
-	ExpectContinueTimeout: 0,
-	// Set the number of idle connections to 2X the number of threads
-	MaxIdleConnsPerHost: 2 * threads,
-	MaxIdleConns:        2 * threads,
-	// But limit their idle time to 1 minute
-	IdleConnTimeout: time.Minute,
-	// Ignore TLS errors
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-}
-
-var httpClient = &http.Client{Transport: &http2.Transport{}}
-
-func getS3Client() *s3.S3 {
-	// Build our config
-	creds := credentials.NewStaticCredentials(access_key, secret_key, "")
-	loglevel := aws.LogOff
-	// Build the rest of the configuration
-	awsConfig := &aws.Config{
-		Region:               aws.String(region),
-		Endpoint:             aws.String(url_host),
-		Credentials:          creds,
-		LogLevel:             &loglevel,
-		S3ForcePathStyle:     aws.Bool(true),
-		S3Disable100Continue: aws.Bool(true),
-		// Comment following to use default transport
-		HTTPClient: &http.Client{Transport: HTTPTransport},
-	}
-	session := session.New(awsConfig)
-	client := s3.New(session)
-	if client == nil {
-		log.Fatalf("FATAL: Unable to create new client.")
-	}
-	// Return success
-	return client
-}
+var force_http1, randomize_suffix bool
+var randomize_seed int64
 
 // canonicalAmzHeaders -- return the x-amz headers canonicalized
 func canonicalAmzHeaders(req *http.Request) string {
@@ -505,7 +460,7 @@ func (stats *Stats) finish(thread_num int) {
 	}
 }
 
-func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
+func runUpload(thread_num int, fendtime time.Time, rand *ThreadSafeUUID, stats *Stats) {
 	errcnt := 0
 	svc := s3.New(session.New(), cfg)
 	for {
@@ -520,7 +475,12 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 		}
 		fileobj := bytes.NewReader(object_data)
 
-		key := fmt.Sprintf("%s%012d", object_prefix, objnum)
+		var key string
+		if randomize_suffix {
+			key = fmt.Sprintf("%s%s", object_prefix, rand.generateUUIDv4().String())
+		} else {
+			key = fmt.Sprintf("%s%012d", object_prefix, objnum)
+		}
 		r := &s3.PutObjectInput{
 			Bucket: &buckets[bucket_num],
 			Key:    &key,
@@ -551,7 +511,7 @@ func runUpload(thread_num int, fendtime time.Time, stats *Stats) {
 	atomic.AddInt64(&running_threads, -1)
 }
 
-func runDownload(thread_num int, fendtime time.Time, stats *Stats) {
+func runDownload(thread_num int, fendtime time.Time, rand *ThreadSafeUUID, stats *Stats) {
 	errcnt := 0
 	svc := s3.New(session.New(), cfg)
 	for {
@@ -566,7 +526,12 @@ func runDownload(thread_num int, fendtime time.Time, stats *Stats) {
 		}
 
 		bucket_num := objnum % int64(bucket_count)
-		key := fmt.Sprintf("%s%012d", object_prefix, objnum)
+		var key string
+		if randomize_suffix {
+			key = fmt.Sprintf("%s%s", object_prefix, rand.generateUUIDv4().String())
+		} else {
+			key = fmt.Sprintf("%s%012d", object_prefix, objnum)
+		}
 		r := &s3.GetObjectInput{
 			Bucket: &buckets[bucket_num],
 			Key:    &key,
@@ -597,10 +562,9 @@ func runDownload(thread_num int, fendtime time.Time, stats *Stats) {
 	atomic.AddInt64(&running_threads, -1)
 }
 
-func runDelete(thread_num int, stats *Stats) {
+func runDelete(thread_num int, rand *ThreadSafeUUID, stats *Stats) {
 	errcnt := 0
 	svc := s3.New(session.New(), cfg)
-
 	for {
 		if duration_secs > -1 && time.Now().After(endtime) {
 			break
@@ -614,7 +578,12 @@ func runDelete(thread_num int, stats *Stats) {
 
 		bucket_num := objnum % int64(bucket_count)
 
-		key := fmt.Sprintf("%s%012d", object_prefix, objnum)
+		var key string
+		if randomize_suffix {
+			key = fmt.Sprintf("%s%s", object_prefix, rand.generateUUIDv4().String())
+		} else {
+			key = fmt.Sprintf("%s%012d", object_prefix, objnum)
+		}
 		r := &s3.DeleteObjectInput{
 			Bucket: &buckets[bucket_num],
 			Key:    &key,
@@ -781,6 +750,8 @@ func runWrapper(loop int, r rune) []OutputStats {
 		object_count_flag = false
 	}
 
+	rnd := NewThreadSafeUUID(randomize_seed)
+
 	switch r {
 	case 'c':
 		log.Printf("Running Loop %d BUCKET CLEAR TEST", loop)
@@ -804,7 +775,7 @@ func runWrapper(loop int, r rune) []OutputStats {
 		log.Printf("Running Loop %d OBJECT PUT TEST", loop)
 		stats = makeStats(loop, "PUT", threads, intervalNano)
 		for n := 0; n < threads; n++ {
-			go runUpload(n, endtime, &stats)
+			go runUpload(n, endtime, rnd, &stats)
 		}
 	case 'l':
 		log.Printf("Running Loop %d BUCKET LIST TEST", loop)
@@ -816,13 +787,13 @@ func runWrapper(loop int, r rune) []OutputStats {
 		log.Printf("Running Loop %d OBJECT GET TEST", loop)
 		stats = makeStats(loop, "GET", threads, intervalNano)
 		for n := 0; n < threads; n++ {
-			go runDownload(n, endtime, &stats)
+			go runDownload(n, endtime, rnd, &stats)
 		}
 	case 'd':
 		log.Printf("Running Loop %d OBJECT DELETE TEST", loop)
 		stats = makeStats(loop, "DEL", threads, intervalNano)
 		for n := 0; n < threads; n++ {
-			go runDelete(n, &stats)
+			go runDelete(n, rnd, &stats)
 		}
 	}
 
@@ -861,6 +832,9 @@ func init() {
 	myflag.StringVar(&secret_key, "s", os.Getenv("AWS_SECRET_ACCESS_KEY"), "Secret key")
 	myflag.StringVar(&url_host, "u", os.Getenv("AWS_HOST"), "URL for host with method prefix")
 	myflag.StringVar(&object_prefix, "op", "", "Prefix for objects")
+	myflag.BoolVar(&force_http1, "fh", false, "Force HTTP1")
+	myflag.BoolVar(&randomize_suffix, "rs", false, "Randomize object name suffix")
+	myflag.Int64Var(&randomize_seed, "sd", 0, "Randomize object name suffix")
 	myflag.StringVar(&bucket_prefix, "bp", "hotsauce-bench", "Prefix for buckets")
 	myflag.StringVar(&region, "r", "us-east-1", "Region for testing")
 	myflag.StringVar(&modes, "m", "cxiplgdcx", "Run modes in order.  See NOTES for more info")
@@ -973,6 +947,11 @@ func main() {
 		// DisableParamValidation:  aws.Bool(true),
 		DisableComputeChecksums: aws.Bool(true),
 		S3ForcePathStyle:        aws.Bool(true),
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				ForceAttemptHTTP2: false,
+			},
+		},
 	}
 
 	// Echo the parameters
@@ -992,6 +971,9 @@ func main() {
 	log.Printf("loops=%d", loops)
 	log.Printf("size=%s", sizeArg)
 	log.Printf("interval=%f", interval)
+	log.Printf("force_http1=%t", force_http1)
+	log.Printf("randomize_suffix=%t", randomize_suffix)
+	log.Printf("randomize_seed=%d", randomize_seed)
 
 	// Init Data
 	initData()
