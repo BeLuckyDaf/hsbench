@@ -48,6 +48,8 @@ var interval float64
 var zero_object_data bool
 var force_http1, randomize_suffix bool
 var randomize_seed int64
+var listMu sync.Mutex
+var listContinuationToken []*string
 
 // canonicalAmzHeaders -- return the x-amz headers canonicalized
 func canonicalAmzHeaders(req *http.Request) string {
@@ -702,21 +704,23 @@ func runBucketsInit(thread_num int, stats *Stats) {
 func runBucketsClear(thread_num int, stats *Stats) {
 	svc := s3.New(session.New(), cfg)
 
-	for {
-		bucket_num := atomic.AddInt64(&op_counter, 1)
-		if bucket_num >= bucket_count {
-			atomic.AddInt64(&op_counter, -1)
-			break
-		}
-		out, err := svc.ListObjects(&s3.ListObjectsInput{
-			Bucket: &buckets[bucket_num],
-			Prefix: &object_prefix,
+	for current_bucket := range bucket_count {
+		bucket_num := (thread_num + int(current_bucket)) % int(bucket_count)
+		log.Printf("Clearing bucket %s num %d thread num %d", buckets[bucket_num], bucket_num, thread_num)
+		listMu.Lock()
+		out, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket:            &buckets[bucket_num],
+			ContinuationToken: listContinuationToken[bucket_num],
 		})
 		if err != nil {
+			listMu.Unlock()
 			break
 		}
+		listContinuationToken[bucket_num] = out.ContinuationToken
+		listMu.Unlock()
 		n := len(out.Contents)
 		for n > 0 {
+			log.Printf("Received %d objects from bucket %s in thread %d", n, buckets[bucket_num], thread_num)
 			for _, v := range out.Contents {
 				start := time.Now().UnixNano()
 				svc.DeleteObject(&s3.DeleteObjectInput{
@@ -726,12 +730,20 @@ func runBucketsClear(thread_num int, stats *Stats) {
 				end := time.Now().UnixNano()
 				stats.updateIntervals(thread_num)
 				stats.addOp(thread_num, *v.Size, end-start)
-
 			}
-			out, err = svc.ListObjects(&s3.ListObjectsInput{Bucket: &buckets[bucket_num]})
+			listMu.Lock()
+			out, err = svc.ListObjectsV2(
+				&s3.ListObjectsV2Input{
+					Bucket:            &buckets[bucket_num],
+					ContinuationToken: listContinuationToken[bucket_num],
+				},
+			)
 			if err != nil {
+				listMu.Unlock()
 				break
 			}
+			listContinuationToken[bucket_num] = out.ContinuationToken
+			listMu.Unlock()
 			n = len(out.Contents)
 		}
 	}
@@ -922,6 +934,7 @@ NOTES:
 		log.Fatalf("Invalid -z argument for object size: %v", err)
 	}
 	object_size = int64(size)
+	listContinuationToken = make([]*string, bucket_count)
 }
 
 func initData() {
