@@ -48,8 +48,10 @@ var interval float64
 var zero_object_data bool
 var force_http1, randomize_suffix bool
 var randomize_seed int64
+
 var listMu sync.Mutex
 var listContinuationToken []*string
+var listBucketComplete []bool
 
 // canonicalAmzHeaders -- return the x-amz headers canonicalized
 func canonicalAmzHeaders(req *http.Request) string {
@@ -708,6 +710,11 @@ func runBucketsClear(thread_num int, stats *Stats) {
 		bucket_num := (thread_num + int(current_bucket)) % int(bucket_count)
 		log.Printf("Clearing bucket %s num %d thread num %d", buckets[bucket_num], bucket_num, thread_num)
 		listMu.Lock()
+		if listBucketComplete[bucket_num] {
+			listMu.Unlock()
+			log.Printf("abort reading bucket %s in thread %d since bucket is read", buckets[bucket_num], thread_num)
+			break
+		}
 		out, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{
 			Bucket:            &buckets[bucket_num],
 			ContinuationToken: listContinuationToken[bucket_num],
@@ -716,7 +723,11 @@ func runBucketsClear(thread_num int, stats *Stats) {
 			listMu.Unlock()
 			break
 		}
-		listContinuationToken[bucket_num] = out.ContinuationToken
+		if out.NextContinuationToken == nil {
+			listBucketComplete[bucket_num] = true
+			log.Printf("Reached end in bucket %s by thread %d", buckets[bucket_num], thread_num)
+		}
+		listContinuationToken[bucket_num] = out.NextContinuationToken
 		listMu.Unlock()
 		n := len(out.Contents)
 		for n > 0 {
@@ -732,6 +743,11 @@ func runBucketsClear(thread_num int, stats *Stats) {
 				stats.addOp(thread_num, *v.Size, end-start)
 			}
 			listMu.Lock()
+			if listBucketComplete[bucket_num] {
+				listMu.Unlock()
+				n = 0
+				continue
+			}
 			out, err = svc.ListObjectsV2(
 				&s3.ListObjectsV2Input{
 					Bucket:            &buckets[bucket_num],
@@ -742,7 +758,11 @@ func runBucketsClear(thread_num int, stats *Stats) {
 				listMu.Unlock()
 				break
 			}
-			listContinuationToken[bucket_num] = out.ContinuationToken
+			if out.NextContinuationToken == nil {
+				listBucketComplete[bucket_num] = true
+				log.Printf("Reached end in bucket %s by thread %d", buckets[bucket_num], thread_num)
+			}
+			listContinuationToken[bucket_num] = out.NextContinuationToken
 			listMu.Unlock()
 			n = len(out.Contents)
 		}
@@ -935,6 +955,8 @@ NOTES:
 	}
 	object_size = int64(size)
 	listContinuationToken = make([]*string, bucket_count)
+	listBucketComplete = make([]bool, bucket_count)
+	log.Printf("list %v", listContinuationToken)
 }
 
 func initData() {
