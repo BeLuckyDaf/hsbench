@@ -718,6 +718,7 @@ func runBucketsClear(thread_num int, stats *Stats) {
 		out, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{
 			Bucket:            &buckets[bucket_num],
 			ContinuationToken: listContinuationToken[bucket_num],
+			MaxKeys:           &max_keys,
 		})
 		if err != nil {
 			listMu.Unlock()
@@ -752,6 +753,7 @@ func runBucketsClear(thread_num int, stats *Stats) {
 				&s3.ListObjectsV2Input{
 					Bucket:            &buckets[bucket_num],
 					ContinuationToken: listContinuationToken[bucket_num],
+					MaxKeys:           &max_keys,
 				},
 			)
 			if err != nil {
