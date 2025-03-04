@@ -48,6 +48,7 @@ var interval float64
 var zero_object_data bool
 var force_http1, randomize_suffix bool
 var randomize_seed int64
+var loop_objects bool
 
 var listMu sync.Mutex
 var listContinuationToken []*string
@@ -524,6 +525,9 @@ func runDownload(thread_num int, fendtime time.Time, rand *ThreadSafeUUID, stats
 		}
 
 		objnum := atomic.AddInt64(&op_counter, 1)
+		if loop_objects && duration_secs > -1 {
+			objnum = objnum % object_count
+		}
 		if object_count > -1 && objnum >= object_count {
 			atomic.AddInt64(&op_counter, -1)
 			break
@@ -871,6 +875,7 @@ func init() {
 	myflag.StringVar(&object_prefix, "op", "", "Prefix for objects")
 	myflag.BoolVar(&force_http1, "fh", false, "Force HTTP1")
 	myflag.BoolVar(&randomize_suffix, "rs", false, "Randomize object name suffix")
+	myflag.BoolVar(&loop_objects, "lo", false, "Loop objects on get operation")
 	myflag.Int64Var(&randomize_seed, "sd", 0, "Randomize object name suffix")
 	myflag.StringVar(&bucket_prefix, "bp", "hotsauce-bench", "Prefix for buckets")
 	myflag.StringVar(&region, "r", "us-east-1", "Region for testing")
